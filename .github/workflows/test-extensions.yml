@@ -68,11 +68,37 @@ jobs:
         name: Check coding style
         run: composer run-script lint -- --dry-run --using-cache=no --diff --show-progress=dots --sequential --ansi --no-interaction -vv
 
+  compute_shards:
+    # Turn the single "how many shards?" knob (IPETEST_SHARD_COUNT below) into the
+    # JSON array of shard indexes consumed by the test_extensions matrix, so the
+    # shard count lives in exactly one place and is trivial to scale up or down.
+    name: Compute shard indexes
+    needs:
+      - check_syntax_data
+      - check_syntax_shell
+      - check_syntax_php
+    runs-on: ubuntu-latest
+    env:
+      IPETEST_SHARD_COUNT: 12
+    outputs:
+      shards: ${{ steps.compute.outputs.shards }}
+      count: ${{ steps.compute.outputs.count }}
+    steps:
+      -
+        id: compute
+        name: Compute shard indexes
+        run: |
+          count="$IPETEST_SHARD_COUNT"
+          shards="$(seq 0 "$((count - 1))" | paste -sd, -)"
+          printf 'shards=[%s]\n' "$shards" >>"$GITHUB_OUTPUT"
+          printf 'count=%s\n' "$count" >>"$GITHUB_OUTPUT"
+
   test_extensions:
     needs:
       - check_syntax_data
       - check_syntax_shell
       - check_syntax_php
+      - compute_shards
     strategy:
       fail-fast: false
       matrix:
@@ -99,10 +125,17 @@ jobs:
           - bullseye
           - bookworm
           - trixie
-    name: Check on ${{ matrix.distro }}
+        # Each distro is split across this many shards, each running on its own
+        # runner, so the per-extension compilation cost is spread out instead of
+        # running serially on a single runner. The index list is generated from a
+        # single knob (IPETEST_SHARD_COUNT in the compute_shards job above).
+        shard: ${{ fromJSON(needs.compute_shards.outputs.shards) }}
+    name: Check on ${{ matrix.distro }} (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     env:
       IPETEST_DOCKER_DISTRO: ${{ matrix.distro }}
+      IPETEST_SHARD_INDEX: ${{ matrix.shard }}
+      IPETEST_SHARD_COUNT: ${{ needs.compute_shards.outputs.count }}
     steps:
       -
         name: Checkout
