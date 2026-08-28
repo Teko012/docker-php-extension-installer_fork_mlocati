@@ -104,6 +104,44 @@ extractExtensionsFromData() {
 	EXTENSIONS_TO_BE_TESTED="${EXTENSIONS_TO_BE_TESTED# }"
 }
 
+# Keep in the EXTENSIONS_TO_BE_TESTED variable only the extensions assigned to
+# the current shard.
+#
+# Sharding lets a single (very long) "test all extensions" run be split across
+# several CI runners: each runner tests only its slice of the extensions.
+# It is controlled by two environment variables and is a no-op unless they ask
+# for more than one shard, so the regular from-commits behavior is unchanged:
+# - IPETEST_SHARD_COUNT (optional) the total number of shards (default: 1)
+# - IPETEST_SHARD_INDEX (optional) the 0-based index of this shard (default: 0)
+#
+# Extensions are distributed round-robin (by position) rather than in contiguous
+# chunks, so the wildly uneven per-extension compilation cost is spread evenly
+# across shards instead of piling up in one of them.
+#
+# Update: EXTENSIONS_TO_BE_TESTED
+applyShardFilter() {
+	applyShardFilter_count="${IPETEST_SHARD_COUNT:-1}"
+	applyShardFilter_index="${IPETEST_SHARD_INDEX:-0}"
+	if test "$applyShardFilter_count" -le 1; then
+		return
+	fi
+	if test -z "$EXTENSIONS_TO_BE_TESTED"; then
+		return
+	fi
+	applyShardFilter_filtered=''
+	applyShardFilter_position=0
+	IFS=' '
+	for applyShardFilter_extension in $EXTENSIONS_TO_BE_TESTED; do
+		if test $((applyShardFilter_position % applyShardFilter_count)) -eq "$applyShardFilter_index"; then
+			applyShardFilter_filtered="$applyShardFilter_filtered $applyShardFilter_extension"
+		fi
+		applyShardFilter_position=$((applyShardFilter_position + 1))
+	done
+	resetIFS
+	EXTENSIONS_TO_BE_TESTED="${applyShardFilter_filtered# }"
+	printf '### SHARD %s of %s selects extensions: %s\n' "$applyShardFilter_index" "$applyShardFilter_count" "$EXTENSIONS_TO_BE_TESTED"
+}
+
 # Remove from the EXTENSIONS_TO_BE_TESTED variable the extensions that are
 # not supported in the distro specified in the data/special-requirements file
 
@@ -420,6 +458,8 @@ case "${1:-}" in
 esac
 
 filterUnsupportedExensionsForDistro
+
+applyShardFilter
 
 if test -z "$EXTENSIONS_TO_BE_TESTED"; then
 	echo 'No extensions to be tested.'
